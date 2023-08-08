@@ -1,0 +1,5 @@
+{
+  "host": "localhost",
+  "port": 50007,
+  "numPortSocks": 2
+}
