@@ -25,6 +25,7 @@ class Serveur:
         self.mainloop()
 
     def mainloop(self):
+        """Accepte une requête et renvoie un écho!"""
         while True:
             events = self.selector.select()
             for key, mask in events:
