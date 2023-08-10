@@ -26,11 +26,19 @@ class RequestHandler:
 
 class Serveur:
     def __init__(self, **kwargs):
+        """
+        Constructeur de la classe Serveur. Initialise le sélecteur, le gestionnaire de requêtes et son thread de
+        contrôle, ainsi que la liste des sockets écoutants, des sockets clients, des requêtes en attentes et le
+        dictionnaire des réponses en attente.
+        :param kwargs: Dictionnaire contenant les entrées "host" et "port" et "numPortSock".  "port" sera le numéro
+        du premier port écoutant, et les numPortSocks consécutifs suivants seront aussi connectés pour écoute.
+        """
         logging.basicConfig(filename="server.log", level=logging.INFO)
         self.numPortSocks = kwargs["numPortSocks"]
         self.host = kwargs["host"]
         self.port = kwargs["port"]
         self.selector = selectors.DefaultSelector()
+        self.listening_sockets = []
         self.active_clients, self.pending_requests, self.pending_replies = [], [], {}
 
         self.request_handler = RequestHandler()
@@ -38,6 +46,12 @@ class Serveur:
         self.handler_thread = threading.Thread(target=self.start_handler_thread, name="handlerthread")
 
     def start_handler_thread(self):
+        """
+        Démarre le thread du gestionnaire de requête. Celui-ci est responsable de retirer une requête de la file des
+        requêtes en attente, traiter cette requête, et mettre les réponses générées dans le dictionnaire des réponses
+        en attente, au destinataire adéquat.
+        :return: None
+        """
         logging.info(f"Début du gestionnaire de requêtes à {self.now}")
         while self.keep_handling_requests:
             if self.pending_requests:
@@ -49,20 +63,35 @@ class Serveur:
                 logging.info(f"La réponse {current_reply_text} prête pour envoi à {self.now}")
 
     def start_server(self):
+        """
+        Connecte le serveur à ses ports d'écoute.  Si aucun port n'est disponible le serveur n'est pas démarré.
+        Si au-moins un port a été contacté avec succès, la boucle principale du serveur est démarrée, ainsi que le
+        thread s'occupant de traiter les requêtes.
+        :return: None
+        """
         listening_port = self.port
         for i in range(self.numPortSocks):
-            portsock = socket(AF_INET, SOCK_STREAM)
-            portsock.bind((self.host, listening_port))
-            portsock.listen(5)
-            portsock.setblocking(False)
-            self.selector.register(portsock, selectors.EVENT_READ, self.accept_new_client)
+            try:
+                portsock = socket(AF_INET, SOCK_STREAM)
+                portsock.bind((self.host, listening_port))
+                portsock.listen(5)
+                portsock.setblocking(False)
+                self.selector.register(portsock, selectors.EVENT_READ, self.accept_new_client)
+                self.listening_sockets.append(portsock)
+            except OSError:
+                logging.error(f"Impossible d'écouter sur le port {listening_port} à {self.now}")
             listening_port += 1
-
-        self.handler_thread.start()
-        self.main_loop()
+        if self.listening_sockets:
+            self.handler_thread.start()
+            self.main_loop()
+        else:
+            logging.error("Le serveur ne peut être démarré car aucun port d'écoute n'est disponible.")
 
     def main_loop(self):
-        """Accepte une requête et renvoie un écho!"""
+        """
+        Réagit aux évènements retournés par le sélecteur, soit que des sockets sont prêts en lecture, soit en écriture.
+        :return: None
+        """
         while True:
             events = self.selector.select()
             for key, mask in events:
@@ -70,6 +99,14 @@ class Serveur:
                 callback(key.fileobj, mask)
 
     def accept_new_client(self, sock, mask):
+        """
+        Accepte une demande de connexion sur un socket d'écoute.  Un nouveau socket client est intégré à la liste des
+        clients existants.  Ce socket est enregistré dans le sélecteur, et une entrée est créée dans le dictionnaire
+        des réponses.
+        :param sock: Le socket d'écoute ayant reçu la demande de connexion
+        :param mask: Non-utilisé
+        :return: None
+        """
         try:
             clientsocket, clientaddress = sock.accept()
             logging.info(f"Connexion à {clientaddress} établies à {self.now}")
@@ -81,6 +118,17 @@ class Serveur:
             logging.error(f"Le serveur n'a pas pu établir la connexion avec un client à {self.now}")
 
     def handle_io_event(self, sock, mask):
+        """
+        Réagit à un évènement retourné par le sélecteur. Si le socket est prêt en lecture, le message est lu sur le
+        socket et intégré à la file des messages reçus, avec l'adresse du socket envoyeur. Si le socket est prêt en
+        écriture, on vérifie d'abord qu'il y a au-moins un message en attente pour ce socket, si oui, il est retiré
+        du dictionnaire des messages en attente, et envoyé sur le socket.  Si une erreur se produit en lecture ou en
+        écriture, le socket est retiré de la liste des clients actifs, désenregistré du sélecteur, et fermé.
+        :param sock: Socket client qui est prêt
+        :param mask: Indique si le socket est prêt en lecture (selectors.EVENT_READ) ou en écriture
+        (selectors.EVENT_WRITE)
+        :return: None
+        """
         if mask & selectors.EVENT_READ:
             try:
                 data = sock.recv(1024)
@@ -122,10 +170,18 @@ class Serveur:
 
     @property
     def now(self):
+        """Retourne l'heure système sous forme de string"""
         return time.ctime(time.time())
 
     @classmethod
     def server_config(cls, file_name):
+        """
+        Retourne un objet serveur configuré avec un fichier de configuration au format json contenant les entrées:
+        "port": le port initial d'écoute, "host": l'adresse IP du serveur, et "numPortSocks": le nombre total de
+        sockets d'écoute.
+        :param file_name: Nom du fichier de configuration
+        :return: Un objet serveur prêt à démarrer
+        """
         with open(file_name, "r") as fileObj:
             params = json.load(fileObj)
 
