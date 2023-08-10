@@ -1,9 +1,7 @@
 # coding: utf-8
 import logging
 import selectors
-import sys, socket
-from select import select
-import queue
+import socket
 import threading
 import time
 
