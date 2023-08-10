@@ -1,4 +1,5 @@
 # coding: utf-8
+import logging
 import selectors
 import sys, socket
 from select import select
@@ -6,76 +7,84 @@ import queue
 import threading
 import time
 
+
 class Client:
     def __init__(self, host, port):
-        self.serverHost = host
-        self.serverPort = port
+        logging.basicConfig(filename="client.log", level=logging.DEBUG)
+        self.server_host = host
+        self.server_port = port
 
         self.sockobj = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sockobj.connect((self.serverHost, self.serverPort))
+        self.sockobj.connect((self.server_host, self.server_port))
+        self.sockobj.setblocking(False)
+        logging.info(f"Connexion établie avec {self.sockobj.getpeername()}")
+        logging.info(f"Adresse locale: {self.sockobj.getsockname()}")
 
         self.pending = []
-        self.keepRunning = True
+        self.keep_running = True
 
-        self.userInputThread = threading.Thread(target=self.userInput, name="userInputThread")
+        self.user_input_thread = threading.Thread(target=self.monitor_user_input, name="userInputThread")
         self.selector = selectors.DefaultSelector()
-        self.selector.register(self.sockobj, selectors.EVENT_READ | selectors.EVENT_WRITE)
+        self.selector.register(fileobj=self.sockobj, events=selectors.EVENT_WRITE | selectors.EVENT_READ)
 
-    def userInput(self):
+    def monitor_user_input(self):
         while True:
             user = input("Saisir votre requête:  ")
             self.pending.append(user)
             if not user:
-                self.keepRunning = False
+                self.keep_running = False
                 break
-        print("Thread des saisies utilisateur terminée.")
+        logging.info("Thread des saisies utilisateur terminée.")
 
-
-    def handleEvent(self, mask):
-        if mask & selectors.EVENT_WRITE:
+    def handle_io_event(self, sock, mask):
+        if mask & selectors.EVENT_READ:
+            data = sock.recv(1024)
+            message = data.decode()
+            logging.info(f"Réponse du serveur: {message} reçue à {self.now}")
+            print(f"Réponse du serveur: {message} à {self.now}")
+        elif mask & selectors.EVENT_WRITE:
             if self.pending:
                 request = self.pending.pop(0)
-                self.sockobj.send(request.encode())
+                sock.send(request.encode())
+                logging.info(f"Requête {request} envoyée à {self.now}")
         else:
-            data = self.sockobj.recv(1024)
-            message = data.decode()
-            print(f"Réponse du serveur: {message} à {self.now}")
-
+            logging.info(f"Masque inattendu dans handle_io_event")
 
     @property
     def now(self):
         return time.ctime(time.time())
 
-    def startClient(self):
-        self.userInputThread.start()
+    def start_client(self):
+        self.user_input_thread.start()
 
-        while self.keepRunning:
-
+        while self.keep_running:
             events = self.selector.select()
-            for _, mask in events:
-                self.handleEvent(mask)
+            for key, mask in events:
+                self.handle_io_event(key.fileobj, mask)
 
-        self.shutDownClient()
+        self.shutdown_client()
 
-    def shutDownClient(self):
+    def shutdown_client(self):
         self.selector.modify(fileobj=self.sockobj, events=selectors.EVENT_WRITE)
 
         while self.pending:
             request = self.pending.pop(0)
-            keepTrying = True
+            keep_trying = True
 
-            while keepTrying:
+            while keep_trying:
                 events = self.selector.select()
-
                 for key, mask in events:
+                    print(f"Masque = {mask}")
                     if key.fileobj == self.sockobj and mask & selectors.EVENT_WRITE:
                         self.sockobj.send(request.encode())
-                        keepTrying = False
+                        keep_trying = False
                         break
 
+        self.selector.unregister(fileobj=self.sockobj)
         self.sockobj.close()
+        self.selector.close()
+
 
 if __name__ == "__main__":
     client = Client("localhost", 50007)
-    client.startClient()
-
+    client.start_client()
